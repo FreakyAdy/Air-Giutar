@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import CameraFeed from './components/CameraFeed';
-import ThreeOverlay from './components/ThreeOverlay';
+import GuitarOverlay from './components/GuitarOverlay';
 import HUD from './components/HUD';
 import OnboardingOverlay from './components/OnboardingOverlay';
 import SettingsPanel from './components/SettingsPanel';
@@ -9,23 +9,24 @@ import { useHandTracking } from './hooks/useHandTracking';
 import { useChordDetection } from './hooks/useChordDetection';
 import { useStrumDetection } from './hooks/useStrumDetection';
 import { useAudioEngine } from './hooks/useAudioEngine';
+import { usePoseValidator } from './hooks/usePoseValidator';
 import { getDisplayName, getActiveStrings } from './utils/chordMaps';
+import { useCamera } from './hooks/useCamera';
 
 const DEFAULT_SETTINGS = {
   showLandmarks: false,
   showFretLabels: true,
   reverbAmount: 0.35,
-  bodyStyle: 'classic',
+  bodyStyle: 'strat',
   mirrorCamera: true,
 };
 
 export default function App() {
   const videoRef = useRef(null);
-  const threeRef = useRef(null);
   const skeletonCanvasRef = useRef(null);
   const containerRef = useRef(null);
 
-  const [cameraState, setCameraState] = useState('loading'); // loading | ready | denied | error
+  const [cameraRetryKey, setCameraRetryKey] = useState(0);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(true);
@@ -37,62 +38,46 @@ export default function App() {
   const [stringFlash, setStringFlash] = useState(-1);
   const [dimensions, setDimensions] = useState({ width: 1280, height: 720 });
   const [handLandmarks, setHandLandmarks] = useState({ left: null, right: null });
+  const [guitarLandmarks, setGuitarLandmarks] = useState(null);
 
   const leftRef = useRef(null);
   const rightRef = useRef(null);
   const prevChordRef = useRef('—');
-  const stringPositionsRef = useRef([]);
-  const pluckCooldownRef = useRef(0);
+  const neckYRef = useRef(null);
 
   const { detectChord } = useChordDetection();
-  const { processRightHand, detectStringPluck, setOnStrum } = useStrumDetection();
-  const { strum, pluckString, setReverbWet, ensureStarted } = useAudioEngine();
+  const { poseActive, validate } = usePoseValidator();
+  const { processRightHand, setOnStrum, setCanPlay } = useStrumDetection();
+  const { strum, setReverbWet, ensureStarted } = useAudioEngine();
 
   const updateSettings = useCallback((partial) => {
     setSettings((s) => ({ ...s, ...partial }));
   }, []);
 
+  const { cameraState, errorDetail } = useCamera(videoRef, cameraRetryKey);
+
   useEffect(() => {
     setReverbWet(settings.reverbAmount);
   }, [settings.reverbAmount, setReverbWet]);
 
-  // Camera init
   useEffect(() => {
-    let stream = null;
+    const video = videoRef.current;
+    if (cameraState !== 'ready' || !video) return;
 
-    async function initCamera() {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: false,
-        });
-
-        const video = videoRef.current;
-        if (!video) return;
-
-        video.srcObject = stream;
-        await video.play();
-
-        setDimensions({ width: video.videoWidth || 1280, height: video.videoHeight || 720 });
-        setCameraState('ready');
-      } catch (err) {
-        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          setCameraState('denied');
-        } else {
-          setCameraState('error');
-        }
-      }
-    }
-
-    initCamera();
-
-    return () => {
-      stream?.getTracks().forEach((t) => t.stop());
+    const updateSize = () => {
+      setDimensions({
+        width: video.videoWidth || 1280,
+        height: video.videoHeight || 720,
+      });
     };
-  }, []);
+    updateSize();
+    video.addEventListener('loadedmetadata', updateSize);
+    return () => video.removeEventListener('loadedmetadata', updateSize);
+  }, [cameraState, cameraRetryKey]);
 
   const handleStrum = useCallback(
     (event) => {
+      if (!leftRef.current) return;
       const chord = detectChord(leftRef.current) || 'Unknown';
       strum(chord, event.direction, (i) => {
         setStringFlash(i);
@@ -106,12 +91,15 @@ export default function App() {
     setOnStrum(handleStrum);
   }, [setOnStrum, handleStrum]);
 
+  useEffect(() => {
+    setCanPlay(true);
+  }, [setCanPlay]);
+
   const { setOnResults } = useHandTracking(videoRef, {
     mirror: settings.mirrorCamera,
     enabled: cameraState === 'ready',
   });
 
-  // Main processing loop via hand tracking callback
   useEffect(() => {
     let lastTime = performance.now();
     let frames = 0;
@@ -126,15 +114,11 @@ export default function App() {
         setShowOnboarding(false);
       }
 
-      const video = videoRef.current;
-      const w = video?.videoWidth || dimensions.width;
-      const h = video?.videoHeight || dimensions.height;
+      const holding = validate(left);
 
-      if (left) {
-        const result = threeRef.current?.updateGuitarFromHand(left, w, h);
-        if (result?.stringPositions) {
-          stringPositionsRef.current = result.stringPositions;
-        }
+      if (holding && left) {
+        setGuitarLandmarks(left);
+        neckYRef.current = left[0].y;
 
         const chord = detectChord(left);
         const display = getDisplayName(chord);
@@ -145,27 +129,15 @@ export default function App() {
           setTimeout(() => setChordFlash(false), 400);
         }
         setActiveStrings(getActiveStrings(chord));
+      } else {
+        setGuitarLandmarks(null);
+        setChordDisplay('—');
+        prevChordRef.current = '—';
+        setActiveStrings([false, false, false, false, false, false]);
       }
 
-      if (right) {
-        processRightHand(right);
-
-        const now = Date.now();
-        if (now - pluckCooldownRef.current > 150) {
-          const stringIdx = detectStringPluck(right, stringPositionsRef.current);
-          if (stringIdx >= 0) {
-            pluckCooldownRef.current = now;
-            const chord = detectChord(leftRef.current) || 'Unknown';
-            const active = getActiveStrings(chord);
-            if (active[stringIdx] !== false) {
-              ensureStarted().then(() => {
-                pluckString(stringIdx);
-                setStringFlash(stringIdx);
-                setTimeout(() => setStringFlash(-1), 120);
-              });
-            }
-          }
-        }
+      if (right && holding) {
+        processRightHand(right, { neckY: neckYRef.current, isHolding: holding });
       }
 
       frames += 1;
@@ -176,16 +148,7 @@ export default function App() {
         lastTime = now;
       }
     });
-  }, [
-    setOnResults,
-    detectChord,
-    processRightHand,
-    detectStringPluck,
-    pluckString,
-    ensureStarted,
-    showOnboarding,
-    dimensions,
-  ]);
+  }, [setOnResults, detectChord, processRightHand, validate, showOnboarding]);
 
   const resizeObserver = useCallback(() => {
     const el = containerRef.current;
@@ -203,6 +166,11 @@ export default function App() {
     return () => window.removeEventListener('resize', resizeObserver);
   }, [resizeObserver]);
 
+  const displayStrings =
+    stringFlash >= 0
+      ? activeStrings.map((on, i) => (i === stringFlash ? true : on))
+      : activeStrings;
+
   if (cameraState === 'denied') {
     return (
       <div className="flex min-h-screen items-center justify-center bg-rock-dark p-8 text-center text-white">
@@ -218,28 +186,15 @@ export default function App() {
     );
   }
 
-  if (cameraState === 'error') {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-rock-dark p-8 text-center text-white">
-        <div className="max-w-md">
-          <p className="mb-4 text-5xl">⚠️</p>
-          <h1 className="font-display mb-4 text-3xl">Camera unavailable</h1>
-          <p className="text-white/70">
-            Could not access a camera device. Connect a webcam and reload the app.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div ref={containerRef} className="relative h-screen w-screen overflow-hidden bg-rock-dark">
       <CameraFeed ref={videoRef} mirror={settings.mirrorCamera} />
 
-      <ThreeOverlay
-        ref={threeRef}
-        bodyStyle={settings.bodyStyle}
-        showFretLabels={settings.showFretLabels}
+      <GuitarOverlay
+        landmarks={guitarLandmarks}
+        activeStrings={displayStrings}
+        poseActive={poseActive}
+        videoRef={videoRef}
         mirror={settings.mirrorCamera}
       />
 
@@ -256,9 +211,10 @@ export default function App() {
       <HUD
         fps={fps}
         isTracking={isTracking}
+        isHolding={poseActive}
         chordDisplay={chordDisplay}
         chordFlash={chordFlash}
-        activeStrings={activeStrings}
+        activeStrings={displayStrings}
         stringFlash={stringFlash}
       />
 
@@ -287,8 +243,30 @@ export default function App() {
       />
 
       {cameraState === 'loading' && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-rock-dark">
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-rock-dark/90">
           <p className="font-display animate-pulse text-2xl text-white">Loading camera…</p>
+        </div>
+      )}
+
+      {cameraState === 'error' && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-rock-dark/95 p-8">
+          <div className="max-w-md text-center text-white">
+            <p className="mb-4 text-5xl">⚠️</p>
+            <h2 className="font-display mb-3 text-3xl">Camera unavailable</h2>
+            <p className="mb-2 text-white/70">
+              Could not start the webcam. Close other apps using the camera, then try again.
+            </p>
+            {errorDetail && (
+              <p className="mb-4 font-mono text-xs text-white/40">{errorDetail}</p>
+            )}
+            <button
+              type="button"
+              onClick={() => setCameraRetryKey((k) => k + 1)}
+              className="rounded-lg bg-rock-accent px-6 py-2 font-semibold hover:bg-rock-glow"
+            >
+              Retry camera
+            </button>
+          </div>
         </div>
       )}
     </div>

@@ -92,9 +92,9 @@ export default function SettingsPanel({
               onChange={(e) => onChange({ bodyStyle: e.target.value })}
               className="w-full rounded-lg border border-white/20 bg-rock-dark px-3 py-2 text-white"
             >
-              <option value="classic">Classic</option>
-              <option value="modern">Modern</option>
-              <option value="bass">Bass</option>
+              <option value="strat">Stratocaster</option>
+              <option value="sunburst">Sunburst Strat</option>
+              <option value="modern">Black Strat</option>
             </select>
           </div>
         </div>

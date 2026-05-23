@@ -9,11 +9,15 @@ export default function OnboardingOverlay({ visible, onDismiss }) {
         <ul className="mb-8 space-y-4 text-left text-white/80">
           <li className="flex gap-3">
             <span className="text-rock-accent">①</span>
-            <span>Show your <strong className="text-white">LEFT hand</strong> to the camera to place the guitar</span>
+            <span>
+              <strong className="text-white">Grip the neck</strong> with your left hand (wrist low, fingers on the fretboard) to summon the Strat
+            </span>
           </li>
           <li className="flex gap-3">
             <span className="text-rock-accent">②</span>
-            <span><strong className="text-white">Strum</strong> with your RIGHT hand — sweep up or down</span>
+            <span>
+              <strong className="text-white">Strum</strong> with your right hand below the neck — deliberate up/down sweeps only
+            </span>
           </li>
           <li className="flex gap-3">
             <span className="text-rock-accent">③</span>

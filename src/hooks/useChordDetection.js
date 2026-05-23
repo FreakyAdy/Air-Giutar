@@ -3,7 +3,7 @@ import { FINGERS } from '../utils/landmarkHelpers';
 import { chordMap } from '../utils/chordMaps';
 
 function isFingerCurled(landmarks, tipIdx, pipIdx) {
-  return landmarks[tipIdx].y > landmarks[pipIdx].y;
+  return landmarks[tipIdx].y > landmarks[pipIdx].y + 0.012;
 }
 
 function getFingerKey(landmarks) {

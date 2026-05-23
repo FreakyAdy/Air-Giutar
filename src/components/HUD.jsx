@@ -1,6 +1,7 @@
 export default function HUD({
   fps,
   isTracking,
+  isHolding,
   chordDisplay,
   chordFlash,
   activeStrings,
@@ -32,7 +33,26 @@ export default function HUD({
           />
           {isTracking ? 'Tracking' : 'No hands'}
         </span>
+        {isTracking && (
+          <span
+            className={`flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold backdrop-blur ${
+              isHolding
+                ? 'bg-rock-accent/30 text-rock-glow'
+                : 'bg-white/10 text-white/60'
+            }`}
+          >
+            {isHolding ? '🎸 Grip locked' : 'Grip the neck'}
+          </span>
+        )}
       </div>
+
+      {!isHolding && isTracking && (
+        <p className="absolute left-1/2 top-1/2 z-30 -translate-x-1/2 -translate-y-1/2 rounded-xl bg-black/50 px-6 py-3 text-center text-sm text-white/80 backdrop-blur">
+          Wrap your left hand around an imaginary neck
+          <br />
+          <span className="text-xs text-white/50">(wrist low, fingers curled on the fretboard)</span>
+        </p>
+      )}
 
       {/* Chord display */}
       <div className="absolute bottom-24 left-1/2 z-30 -translate-x-1/2 text-center">
